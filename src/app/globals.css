@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Monaco', 'Menlo', monospace;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  min-height: 100vh;
+}
+
+.cell {
+  border: 1px solid #9ca3af;
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+  font-weight: bold;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.1s ease-in-out;
+}
+
+.cell:hover {
+  background-color: #e5e7eb;
+}
+
+.cell.revealed {
+  background-color: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.cell.mine {
+  background-color: #ef4444;
+  color: white;
+}
+
+.cell.flagged {
+  background-color: #fde047;
+}
+
+.cell.flagged:hover {
+  background-color: #facc15;
+}
+
+.number-1 { color: #2563eb; }
+.number-2 { color: #16a34a; }
+.number-3 { color: #dc2626; }
+.number-4 { color: #9333ea; }
+.number-5 { color: #ca8a04; }
+.number-6 { color: #ec4899; }
+.number-7 { color: #000000; }
+.number-8 { color: #6b7280; }
+
+/* AI Move Highlighting */
+.cell.ai-last-move {
+  box-shadow: 0 0 0 3px #10b981;
+  animation: pulse-green 2s ease-in-out;
+}
+
+.cell.ai-move {
+  box-shadow: 0 0 0 2px #3b82f6;
+}
+
+@keyframes pulse-green {
+  0%, 100% {
+    box-shadow: 0 0 0 3px #10b981;
+  }
+  50% {
+    box-shadow: 0 0 0 3px #10b981, 0 0 15px #10b981;
+  }
+}
