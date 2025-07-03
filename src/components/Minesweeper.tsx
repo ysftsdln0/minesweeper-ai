@@ -15,7 +15,7 @@ import {
   checkWinCondition,
   revealAllMines,
 } from '../utils/gameLogic'
-import { MinesweeperAISolver, AIMove } from '../utils/aiSolver'
+import { MinesweeperAISolver, AIMove } from '../utils/aiSolver_fixed'
 import type { Cell as CellType } from '../types/game'
 
 const Minesweeper: React.FC = () => {
@@ -82,7 +82,7 @@ const Minesweeper: React.FC = () => {
     }
   }, [gameStarted, gameStatus])
 
-  const handleCellClick = (row: number, col: number, isAiMove?: boolean) => {
+  const handleCellClick = async (row: number, col: number, isAiMove?: boolean) => {
     if (gameStatus !== 'playing' || board[row][col].isFlagged) {
       return
     }
@@ -102,6 +102,12 @@ const Minesweeper: React.FC = () => {
 
     const cell = currentBoard[row][col]
     
+    // Veri toplama: Hamle sonucunu backend'e gönder
+    if (aiSolver) {
+      const label = cell.isMine ? 1 : 0 // 1 if mine, 0 if safe
+      await aiSolver.logResult(row, col, label)
+    }
+    
     // Artık ilk tıklama her zaman güvenli olacak
     if (cell.isMine) {
       const revealedBoard = revealAllMines(currentBoard)
@@ -111,6 +117,11 @@ const Minesweeper: React.FC = () => {
       if (isAiMove) {
         setIsAiRunning(false)
         setAiStats(prev => ({ ...prev, success: false }))
+      }
+      
+      // Oyun bittiğinde modeli eğit
+      if (aiSolver) {
+        await aiSolver.trainModel()
       }
       return
     }
@@ -124,6 +135,11 @@ const Minesweeper: React.FC = () => {
       if (isAiMove) {
         setIsAiRunning(false)
         setAiStats(prev => ({ ...prev, success: true }))
+      }
+      
+      // Oyun kazanıldığında da modeli eğit
+      if (aiSolver) {
+        await aiSolver.trainModel()
       }
     }
   }
@@ -169,9 +185,9 @@ const Minesweeper: React.FC = () => {
     setIsAiRunning(false)
   }
 
-  const stepAiSolver = () => {
+  const stepAiSolver = async () => {
     if (gameStatus === 'playing' && aiSolver && minesPlaced) {
-      const move = aiSolver.getNextMove()
+      const move = await aiSolver.getNextMove()
       if (move) {
         setLastAiMove(move)
         setAiMoves(prev => [...prev, move])
@@ -184,7 +200,7 @@ const Minesweeper: React.FC = () => {
         }))
 
         if (move.action === 'reveal') {
-          handleCellClick(move.row, move.col, true)
+          await handleCellClick(move.row, move.col, true)
         } else if (move.action === 'flag') {
           handleCellRightClick(new MouseEvent('contextmenu') as any, move.row, move.col, true)
         }
@@ -217,7 +233,7 @@ const Minesweeper: React.FC = () => {
     }
 
     const executeAiMove = async () => {
-      const move = aiSolver.getNextMove()
+      const move = await aiSolver.getNextMove()
       
       if (!move) {
         setIsAiRunning(false)
@@ -237,7 +253,7 @@ const Minesweeper: React.FC = () => {
 
       // Execute the move
       if (move.action === 'reveal') {
-        handleCellClick(move.row, move.col, true) // true indicates AI move
+        await handleCellClick(move.row, move.col, true) // true indicates AI move
       } else if (move.action === 'flag') {
         handleCellRightClick(new MouseEvent('contextmenu') as any, move.row, move.col, true)
       }

@@ -1,4 +1,5 @@
 import { Cell } from '../types/game'
+import axios from 'axios'
 
 export interface AIMove {
   row: number
@@ -20,6 +21,9 @@ export class MinesweeperAISolver {
   private rows: number
   private cols: number
   private totalMines: number
+  private mlApiUrl = 'http://localhost:5005'
+  private lastFeatures: number[][] = []
+  private lastLabels: number[] = []
 
   constructor(board: Cell[][], totalMines: number) {
     this.board = board.map(row => row.map(cell => ({ ...cell })))
@@ -180,16 +184,31 @@ export class MinesweeperAISolver {
   }
 
   /**
-   * Strategy 3: Probability-based guessing
-   * Calculate probability of each unrevealed cell being a mine
+   * Optimized: Only consider frontier cells for probability calculation
+   */
+  private getFrontierCells(): Array<{row: number, col: number}> {
+    const frontier: Array<{row: number, col: number}> = []
+    for (let row = 0; row < this.rows; row++) {
+      for (let col = 0; col < this.cols; col++) {
+        const cell = this.board[row][col]
+        if (!cell.isRevealed && !cell.isFlagged) {
+          // If any neighbor is revealed, it's a frontier cell
+          if (this.getNeighbors(row, col).some(n => n.isRevealed)) {
+            frontier.push({ row, col })
+          }
+        }
+      }
+    }
+    return frontier
+  }
+
+  /**
+   * Optimized: Only calculate probabilities for frontier cells
    */
   private calculateProbabilities(): Map<string, number> {
     const probabilities = new Map<string, number>()
-    
-    // Count total unrevealed cells
-    let unrevealedCount = 0
     let flaggedCount = 0
-    
+    let unrevealedCount = 0
     for (let row = 0; row < this.rows; row++) {
       for (let col = 0; col < this.cols; col++) {
         const cell = this.board[row][col]
@@ -201,53 +220,46 @@ export class MinesweeperAISolver {
         }
       }
     }
-
     const remainingMines = this.totalMines - flaggedCount
-    const baseProbability = remainingMines / unrevealedCount
-
-    // For each unrevealed cell, calculate its probability of being a mine
-    for (let row = 0; row < this.rows; row++) {
-      for (let col = 0; col < this.cols; col++) {
-        const cell = this.board[row][col]
-        
-        if (!cell.isRevealed && !cell.isFlagged) {
-          let probability = baseProbability
-          let constraintCount = 0
-          let totalConstraintValue = 0
-
-          // Check all revealed neighbors and their constraints
-          for (let dr = -1; dr <= 1; dr++) {
-            for (let dc = -1; dc <= 1; dc++) {
-              const neighborRow = row + dr
-              const neighborCol = col + dc
-              
-              if (neighborRow >= 0 && neighborRow < this.rows && 
-                  neighborCol >= 0 && neighborCol < this.cols) {
-                const neighbor = this.board[neighborRow][neighborCol]
-                
-                if (neighbor.isRevealed && !neighbor.isMine && neighbor.neighborCount > 0) {
-                  const flaggedNeighbors = this.countFlaggedNeighbors(neighborRow, neighborCol)
-                  const unrevealedNeighbors = this.countUnrevealedNeighbors(neighborRow, neighborCol)
-                  
-                  if (unrevealedNeighbors > 0) {
-                    const localProbability = (neighbor.neighborCount - flaggedNeighbors) / unrevealedNeighbors
-                    totalConstraintValue += localProbability
-                    constraintCount++
-                  }
-                }
+    const baseProbability = remainingMines / Math.max(1, unrevealedCount)
+    // Only consider frontier cells
+    const frontier = this.getFrontierCells()
+    for (const {row, col} of frontier) {
+      let probability = baseProbability
+      let constraintCount = 0
+      let totalConstraintValue = 0
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          const neighborRow = row + dr
+          const neighborCol = col + dc
+          if (neighborRow >= 0 && neighborRow < this.rows && neighborCol >= 0 && neighborCol < this.cols) {
+            const neighbor = this.board[neighborRow][neighborCol]
+            if (neighbor.isRevealed && !neighbor.isMine && neighbor.neighborCount > 0) {
+              const flaggedNeighbors = this.countFlaggedNeighbors(neighborRow, neighborCol)
+              const unrevealedNeighbors = this.countUnrevealedNeighbors(neighborRow, neighborCol)
+              if (unrevealedNeighbors > 0) {
+                const localProbability = (neighbor.neighborCount - flaggedNeighbors) / unrevealedNeighbors
+                totalConstraintValue += localProbability
+                constraintCount++
               }
             }
           }
-
-          if (constraintCount > 0) {
-            probability = totalConstraintValue / constraintCount
-          }
-
-          probabilities.set(`${row}-${col}`, Math.max(0, Math.min(1, probability)))
+        }
+      }
+      if (constraintCount > 0) {
+        probability = totalConstraintValue / constraintCount
+      }
+      probabilities.set(`${row}-${col}`, Math.max(0, Math.min(1, probability)))
+    }
+    // For non-frontier cells, assign base probability (for true guessing)
+    for (let row = 0; row < this.rows; row++) {
+      for (let col = 0; col < this.cols; col++) {
+        const cell = this.board[row][col]
+        if (!cell.isRevealed && !cell.isFlagged && !probabilities.has(`${row}-${col}`)) {
+          probabilities.set(`${row}-${col}`, baseProbability)
         }
       }
     }
-
     return probabilities
   }
 
@@ -260,9 +272,9 @@ export class MinesweeperAISolver {
     let bestMove: AIMove | null = null
     let lowestProbability = 1.0
 
-    for (const [key, probability] of probabilities) {
+    Array.from(probabilities.keys()).forEach(key => {
+      const probability = probabilities.get(key)!
       const [row, col] = key.split('-').map(Number)
-      
       if (probability < lowestProbability) {
         lowestProbability = probability
         bestMove = {
@@ -273,7 +285,7 @@ export class MinesweeperAISolver {
           reasoning: `Lowest mine probability: ${(probability * 100).toFixed(1)}%`
         }
       }
-    }
+    })
 
     return bestMove
   }
@@ -371,43 +383,96 @@ export class MinesweeperAISolver {
     return null
   }
 
-  /**
-   * Get the next best move
-   */
-  public getNextMove(): AIMove | null {
-    // First, try basic constraint solving
-    const basicMoves = this.findBasicMoves()
-    if (basicMoves.length > 0) {
-      return basicMoves[0] // Return the first certain move
+  // Converts a cell and its neighbors into a feature vector for ML
+  private extractFeatures(row: number, col: number): number[] {
+    const cell = this.board[row][col]
+    const neighbors = this.getNeighbors(row, col)
+    // Example features: isRevealed, isFlagged, neighborCount, #flagged, #unrevealed, neighbor states
+    const features = [
+      cell.isRevealed ? 1 : 0,
+      cell.isFlagged ? 1 : 0,
+      cell.neighborCount,
+      this.countFlaggedNeighbors(row, col),
+      this.countUnrevealedNeighbors(row, col),
+      ...neighbors.map(n => n.isRevealed ? 1 : 0),
+      ...neighbors.map(n => n.isFlagged ? 1 : 0),
+      ...neighbors.map(n => n.neighborCount)
+    ]
+    return features
+  }
+
+  // Log a move to the ML backend
+  private async logMove(row: number, col: number, label: number) {
+    const features = this.extractFeatures(row, col)
+    this.lastFeatures.push(features)
+    this.lastLabels.push(label)
+    try {
+      await axios.post(`${this.mlApiUrl}/log_move`, { features, label })
+      // Debug log
+      console.log('Logged move to backend:', { features, label })
+    } catch (e) {
+      console.error('Failed to log move to backend:', e)
     }
+  }
 
-    // Then, try pattern recognition
-    const patternMoves = this.findPatternMoves()
-    if (patternMoves.length > 0) {
-      return patternMoves[0]
+  // Predict mine probability for a cell using ML backend
+  private async predictMineProbability(row: number, col: number): Promise<number> {
+    const features = this.extractFeatures(row, col)
+    try {
+      const res = await axios.post(`${this.mlApiUrl}/predict`, { features })
+      return res.data.mine_probability
+    } catch (e) {
+      return 0.5 // fallback
     }
-
-    // Check if this is the first move
-    const hasRevealedCells = this.board.some(row => 
-      row.some(cell => cell.isRevealed)
-    )
-
-    if (!hasRevealedCells) {
-      return this.findSafeStartingMove()
-    }
-
-    // Fall back to probabilistic analysis
-    return this.findProbabilisticMove()
   }
 
   /**
-   * Get all possible certain moves
+   * Get the next best move
    */
-  public getAllCertainMoves(): AIMove[] {
-    const basicMoves = this.findBasicMoves()
-    const patternMoves = this.findPatternMoves()
-    
-    return [...basicMoves, ...patternMoves].filter(move => move.confidence >= 0.9)
+  public async getNextMove(): Promise<AIMove | null> {
+    // Find all unrevealed, unflagged cells
+    const candidates: Array<{row: number, col: number}> = []
+    for (let row = 0; row < this.rows; row++) {
+      for (let col = 0; col < this.cols; col++) {
+        const cell = this.board[row][col]
+        if (!cell.isRevealed && !cell.isFlagged) {
+          candidates.push({ row, col })
+        }
+      }
+    }
+    // Predict mine probability for each candidate
+    let bestMove: AIMove | null = null
+    let lowestProb = 1.0
+    for (const {row, col} of candidates) {
+      const prob = await this.predictMineProbability(row, col)
+      if (prob < lowestProb) {
+        lowestProb = prob
+        bestMove = {
+          row,
+          col,
+          action: 'reveal',
+          confidence: 1 - prob,
+          reasoning: `ML mine probability: ${(prob * 100).toFixed(1)}%`
+        }
+      }
+    }
+    return bestMove
+  }
+
+  // Call this after each game to train the model
+  public async trainModel() {
+    try {
+      await axios.post(`${this.mlApiUrl}/train`)
+    } catch (e) {
+      // ignore for now
+    }
+  }
+
+  // Call this after each move to log the result (label: 1 if mine, 0 if safe)
+  public async logResult(row: number, col: number, label: number) {
+    await this.logMove(row, col, label)
+    // Debug log
+    console.log('logResult called:', { row, col, label })
   }
 
   /**
@@ -417,13 +482,16 @@ export class MinesweeperAISolver {
     this.board = newBoard.map(row => row.map(cell => ({ ...cell })))
   }
 
-  /**
-   * Check if the game is solvable without guessing
-   */
-  public isSolvableWithoutGuessing(): boolean {
-    const certainMoves = this.getAllCertainMoves()
-    return certainMoves.length > 0
-  }
+  // public getAllCertainMoves(): AIMove[] {
+  //   const basicMoves = this.findBasicMoves()
+  //   const patternMoves = this.findPatternMoves()
+  //   return [...basicMoves, ...patternMoves].filter(move => move.confidence >= 0.9)
+  // }
+
+  // public isSolvableWithoutGuessing(): boolean {
+  //   const certainMoves = this.getAllCertainMoves()
+  //   return certainMoves.length > 0
+  // }
 
   /**
    * Get game completion percentage
